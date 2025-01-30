@@ -747,3 +747,15 @@ def load_knowledge_graph(path):
     labels = torch.LongTensor(np.random.randint(0, 5, len(G.nodes)))  # Assuming 5 classes
 
     return labels, [adj_matrix_1, adj_matrix_2], feature_matrix, feature_matrix, 2
+
+def create_subgraphs(feature_matrix, adj_matrices, subgraph_size):
+    num_nodes = feature_matrix.size(0)
+    subgraphs = []
+
+    for start in range(0, num_nodes, subgraph_size):
+        end = min(start + subgraph_size, num_nodes)
+        sub_feature_matrix = feature_matrix[start:end]
+        sub_adj_matrices = [adj[start:end, start:end] for adj in adj_matrices]
+        subgraphs.append((sub_feature_matrix, sub_adj_matrices))
+
+    return subgraphs

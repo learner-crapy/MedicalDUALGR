@@ -10,7 +10,7 @@ from torch.optim import Adam
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 
-from utils import load_data, normalize_weight, cal_homo_ratio, load_knowledge_graph
+from utils import load_data, normalize_weight, cal_homo_ratio, load_knowledge_graph, create_subgraphs
 from models import EnDecoder, DuaLGR, GNN
 from evaluation import eva
 from settings import get_settings
@@ -23,12 +23,14 @@ parser.add_argument('--dataset', type=str, default='knowledge_graph', help='data
 parser.add_argument('--train', type=bool, default=False, help='training mode')
 parser.add_argument('--cuda_device', type=int, default=0, help='CUDA device number')
 parser.add_argument('--use_cuda', type=bool, default=True, help='use CUDA if available')
+parser.add_argument('--subgraph_size', type=int, default=1000, help='number of nodes per subgraph')
 args = parser.parse_args()
 
 dataset = args.dataset
 train = args.train
 cuda_device = args.cuda_device
 use_cuda = args.use_cuda
+subgraph_size = args.subgraph_size
 
 settings = get_settings(dataset)
 
@@ -158,60 +160,64 @@ if train:
         loss_re_a = 0.
         loss_re_ax = 0.
 
-        try:
-            a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
-        except RuntimeError as e:
-            if 'CUDA out of memory' in str(e):
-                print("CUDA out of memory. Reducing batch size and retrying...")
-                batch_size = shared_feature.size(0) // 2
-                shared_feature = shared_feature[:batch_size]
-                shared_feature_label = shared_feature_label[:batch_size]
-                adjs_labels = [adj[:batch_size, :batch_size] for adj in adjs_labels]
-                continue
-            else:
-                raise e
+        subgraphs = create_subgraphs(shared_feature, adjs_labels, subgraph_size)
+        for subgraph in subgraphs:
+            sub_shared_feature, sub_adjs_labels = subgraph
+            try:
+                a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+            except RuntimeError as e:
+                if 'CUDA out of memory' in str(e):
+                    print("CUDA out of memory. Reducing batch size and retrying...")
+                    batch_size = sub_shared_feature.size(0) // 2
+                    sub_shared_feature = sub_shared_feature[:batch_size]
+                    sub_adjs_labels = [adj[:batch_size, :batch_size] for adj in sub_adjs_labels]
+                    continue
+                else:
+                    raise e
 
-        for v in range(graph_num):
-            loss_re_a += F.binary_cross_entropy(a_pred, adjs_labels[v])
-        loss_re_x = F.binary_cross_entropy(x_pred, shared_feature_label)
-        loss_re += loss_re_a + loss_re_x
+            for v in range(graph_num):
+                loss_re_a += F.binary_cross_entropy(a_pred, sub_adjs_labels[v])
+            loss_re_x = F.binary_cross_entropy(x_pred, sub_shared_feature)
+            loss_re += loss_re_a + loss_re_x
 
-        kmeans = KMeans(n_clusters=class_num, n_init=5)
-        y_prim = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-        pseudo_label = y_prim
+            kmeans = KMeans(n_clusters=class_num, n_init=5)
+            y_prim = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
+            pseudo_label = y_prim
 
-        for v in range(graph_num):
-            y_pred = kmeans.fit_predict(z_all[v].detach().cpu().numpy())
-            a = eva(y_prim, y_pred, visible=False, metrics='nmi')
-            best_a[v] = a
+            for v in range(graph_num):
+                y_pred = kmeans.fit_predict(z_all[v].detach().cpu().numpy())
+                a = eva(y_prim, y_pred, visible=False, metrics='nmi')
+                best_a[v] = a
 
-        weights = normalize_weight(best_a, p=weight_soft)
-        # print(weights)
+            weights = normalize_weight(best_a, p=weight_soft)
+            # print(weights)
 
 
-        p = model.target_distribution(q_all[-1])
-        for v in range(graph_num):
-            loss_kl += F.kl_div(q_all[v].log(), p, reduction='batchmean')
-        loss_kl += F.kl_div(q_all[-1].log(), p, reduction='batchmean')
+            p = model.target_distribution(q_all[-1])
+            for v in range(graph_num):
+                loss_kl += F.kl_div(q_all[v].log(), p, reduction='batchmean')
+            loss_kl += F.kl_div(q_all[-1].log(), p, reduction='batchmean')
 
-        loss = loss_re + loss_kl
-        loss_list.append(loss.item())
-        optimizer_model.zero_grad()
-        loss.backward()
-        optimizer_model.step()
+            loss = loss_re + loss_kl
+            loss_list.append(loss.item())
+            optimizer_model.zero_grad()
+            loss.backward()
+            optimizer_model.step()
 
-        print('epoch: {}, loss: {}, loss_re: {}, loss_kl:{}, badcount: {}, loss_re_a: {}, loss_re_x: {}'. format(epoch_num, loss, loss_re, loss_kl, bad_count, loss_re_a, loss_re_x))
+            print('epoch: {}, loss: {}, loss_re: {}, loss_kl:{}, badcount: {}, loss_re_a: {}, loss_re_x: {}'. format(epoch_num, loss, loss_re, loss_kl, bad_count, loss_re_a, loss_re_x))
 
     # =========================================evaluation=============================================================
         if epoch_num % update_interval == 0:
             model.eval()
             with torch.no_grad():
-                a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
-                kmeans = KMeans(n_clusters=class_num, n_init=5)
-                y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-                nmi, acc, ari, f1 = eva(y, y_eval, str(epoch_num) + 'Kz')
-                nmi_list.append(nmi)
-                acc_list.append(acc)
+                for subgraph in subgraphs:
+                    sub_shared_feature, sub_adjs_labels = subgraph
+                    a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+                    kmeans = KMeans(n_clusters=class_num, n_init=5)
+                    y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
+                    nmi, acc, ari, f1 = eva(y, y_eval, str(epoch_num) + 'Kz')
+                    nmi_list.append(nmi)
+                    acc_list.append(acc)
 
         if acc > best_acc:
             if os.path.exists('./pkl/dualgr_{}_acc{:.4f}.pkl'.format(dataset, best_acc)):
@@ -255,10 +261,13 @@ model.load_state_dict(state_dic)
 model.eval()
 with torch.no_grad():
     model.endecoder = endecoder
-    a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha,quantize=quantize, varepsilon=varepsilon)
-    kmeans = KMeans(n_clusters=class_num, n_init=5)
-    y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-    nmi, acc, ari, f1 = eva(y, y_eval, 'Final Kz')
+    subgraphs = create_subgraphs(shared_feature, adjs_labels, subgraph_size)
+    for subgraph in subgraphs:
+        sub_shared_feature, sub_adjs_labels = subgraph
+        a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha,quantize=quantize, varepsilon=varepsilon)
+        kmeans = KMeans(n_clusters=class_num, n_init=5)
+        y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
+        nmi, acc, ari, f1 = eva(y, y_eval, 'Final Kz')
 
     # Save clustering results to CSV
     clustering_results = pd.DataFrame({'Node': range(len(y_eval)), 'Cluster': y_eval})
