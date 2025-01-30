@@ -162,6 +162,14 @@ class DuaLGR(nn.Module):
         x.mul_(r_inv)  # In-place operation
         return x
 
+    def process_subgraphs(self, subgraphs, w, pseudo_label, alpha, quantize=0.8, varepsilon=0.3):
+        results = []
+        for subgraph in subgraphs:
+            sub_shared_feature, sub_adjs_labels = subgraph
+            result = self.forward(sub_shared_feature, sub_adjs_labels, w, pseudo_label, alpha, quantize, varepsilon)
+            results.append(result)
+        return results
+
 
 class GNN(nn.Module):
     def __init__(self, feat_dim, hidden_dim, latent_dim):
