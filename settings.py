@@ -205,47 +205,70 @@ def acm04():
     parser.add_argument('--weight_soft', type=int, default=3, help='smooth-sharp paramter')
     parser.add_argument('--alpha', type=int, default=10, help='alpha')
     parser.add_argument('--quantize', type=float, default=0.5, help='quantize Omega')
-    parser.add_argument('--varepsilon', type=float, default=0.5, help='varepsilon')
+    parser.add.argument('--varepsilon', type=float, default=0.5, help='varepsilon')
     parser.add_argument('--endecoder_hidden_dim', type=int, default=512, help='endecoder_hidden_dim')
-    parser.add_argument('--hidden_dim', type=int, default=512, help='hidden_dim')
-    parser.add_argument('--latent_dim', type=int, default=128, help='latent_dim')
-    parser.add_argument('--pretrain', type=int, default=1000, help='pretrain epochs')
-    parser.add_argument('--epoch', type=int, default=100000, help='')
-    parser.add_argument('--patience', type=int, default=100, help='')
-    parser.add_argument('--endecoder_lr', type=float, default=1e-3, help='learning rate for autoencoder')
-    parser.add_argument('--endecoder_weight_decay', type=float, default=5e-6, help='weight decay for autoencoder')
-    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate for DuaLGR')
-    parser.add_argument('--weight_decay', type=float, default=5e-6, help='weight decay for DuaLGR')
-    parser.add_argument('--update_interval', type=int, default=10, help='')
-    parser.add_argument('--random_seed', type=int, default=2023, help='')
+    parser.add.argument('--hidden_dim', type=int, default=512, help='hidden_dim')
+    parser.add.argument('--latent_dim', type=int, default=128, help='latent_dim')
+    parser.add.argument('--pretrain', type=int, default=1000, help='pretrain epochs')
+    parser.add.argument('--epoch', type=int, default=100000, help='')
+    parser.add.argument('--patience', type=int, default=100, help='')
+    parser.add.argument('--endecoder_lr', type=float, default=1e-3, help='learning rate for autoencoder')
+    parser.add.argument('--endecoder_weight_decay', type=float, default=5e-6, help='weight decay for autoencoder')
+    parser.add.argument('--lr', type=float, default=1e-3, help='learning rate for DuaLGR')
+    parser.add.argument('--weight_decay', type=float, default=5e-6, help='weight decay for DuaLGR')
+    parser.add.argument('--update_interval', type=int, default=10, help='')
+    parser.add.argument('--random_seed', type=int, default=2023, help='')
 
     args = parser.parse_args()
     return args
 
 def acm05():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default='DuaLGR_acm05', help='model_name')
-    parser.add_argument('--path', type=str, default='./data/', help='The path of datasets')
-    parser.add_argument('--weight_soft', type=int, default=3, help='smooth-sharp paramter')
-    parser.add_argument('--alpha', type=int, default=10, help='alpha')
-    parser.add_argument('--quantize', type=float, default=0.8, help='quantize Omega')
-    parser.add_argument('--varepsilon', type=float, default=0.3, help='varepsilon')
-    parser.add_argument('--endecoder_hidden_dim', type=int, default=512, help='endecoder_hidden_dim')
-    parser.add_argument('--hidden_dim', type=int, default=512, help='hidden_dim')
-    parser.add_argument('--latent_dim', type=int, default=128, help='latent_dim')
-    parser.add_argument('--pretrain', type=int, default=1000, help='pretrain epochs')
-    parser.add_argument('--epoch', type=int, default=100000, help='')
-    parser.add_argument('--patience', type=int, default=100, help='')
-    parser.add_argument('--endecoder_lr', type=float, default=1e-3, help='learning rate for autoencoder')
-    parser.add_argument('--endecoder_weight_decay', type=float, default=5e-6, help='weight decay for autoencoder')
-    parser.add_argument('--lr', type=float, default=1e-3, help='learning rate for DuaLGR')
-    parser.add_argument('--weight_decay', type=float, default=5e-6, help='weight decay for DuaLGR')
-    parser.add_argument('--update_interval', type=int, default=10, help='')
-    parser.add_argument('--random_seed', type=int, default=2023, help='')
+    parser.add.argument('--model_name', type=str, default='DuaLGR_acm05', help='model_name')
+    parser.add.argument('--path', type=str, default='./data/', help='The path of datasets')
+    parser.add.argument('--weight_soft', type=int, default=3, help='smooth-sharp paramter')
+    parser.add.argument('--alpha', type=int, default=10, help='alpha')
+    parser.add.argument('--quantize', type=float, default=0.8, help='quantize Omega')
+    parser.add.argument('--varepsilon', type=float, default=0.3, help='varepsilon')
+    parser.add.argument('--endecoder_hidden_dim', type=int, default=512, help='endecoder_hidden_dim')
+    parser.add.argument('--hidden_dim', type=int, default=512, help='hidden_dim')
+    parser.add.argument('--latent_dim', type=int, default=128, help='latent_dim')
+    parser.add.argument('--pretrain', type=int, default=1000, help='pretrain epochs')
+    parser.add.argument('--epoch', type=int, default=100000, help='')
+    parser.add.argument('--patience', type=int, default=100, help='')
+    parser.add.argument('--endecoder_lr', type=float, default=1e-3, help='learning rate for autoencoder')
+    parser.add.argument('--endecoder_weight_decay', type=float, default=5e-6, help='weight decay for autoencoder')
+    parser.add.argument('--lr', type=float, default=1e-3, help='learning rate for DuaLGR')
+    parser.add.argument('--weight_decay', type=float, default=5e-6, help='weight decay for DuaLGR')
+    parser.add.argument('--update_interval', type=int, default=10, help='')
+    parser.add.argument('--random_seed', type=int, default=2023, help='')
 
     args = parser.parse_args()
     return args
 
+def knowledge_graph():
+    parser = argparse.ArgumentParser()
+    parser.add.argument('--model_name', type=str, default='DuaLGR_knowledge_graph', help='model_name')
+    parser.add.argument('--path', type=str, default='./data/', help='The path of datasets')
+    parser.add.argument('--weight_soft', type=int, default=3, help='smooth-sharp paramter')
+    parser.add.argument('--alpha', type=int, default=10, help='alpha')
+    parser.add.argument('--quantize', type=float, default=0.8, help='quantize Omega')
+    parser.add.argument('--varepsilon', type=float, default=0.3, help='varepsilon')
+    parser.add.argument('--endecoder_hidden_dim', type=int, default=512, help='endecoder_hidden_dim')
+    parser.add.argument('--hidden_dim', type=int, default=512, help='hidden_dim')
+    parser.add.argument('--latent_dim', type=int, default=128, help='latent_dim')
+    parser.add.argument('--pretrain', type=int, default=1000, help='pretrain epochs')
+    parser.add.argument('--epoch', type=int, default=100000, help='')
+    parser.add.argument('--patience', type=int, default=100, help='')
+    parser.add.argument('--endecoder_lr', type=float, default=1e-3, help='learning rate for autoencoder')
+    parser.add.argument('--endecoder_weight_decay', type=float, default=5e-6, help='weight decay for autoencoder')
+    parser.add.argument('--lr', type=float, default=1e-3, help='learning rate for DuaLGR')
+    parser.add.argument('--weight_decay', type=float, default=5e-6, help='weight decay for DuaLGR')
+    parser.add.argument('--update_interval', type=int, default=10, help='')
+    parser.add.argument('--random_seed', type=int, default=2023, help='')
+
+    args = parser.parse_args()
+    return args
 
 def get_settings(dataset='acm'):
     args_dic = {
@@ -259,5 +282,6 @@ def get_settings(dataset='acm'):
         'acm03': acm03(),
         'acm04': acm04(),
         'acm05': acm05(),
+        'knowledge_graph': knowledge_graph(),
     }
     return args_dic[dataset]
