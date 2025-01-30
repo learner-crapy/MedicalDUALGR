@@ -19,8 +19,8 @@ from visulization import plot_loss, plot_tsne
 import pandas as pd
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='acm', help='datasets: acm, dblp, texas, chameleon, acm00, acm01, acm02, acm03, acm04, acm05, knowledge_graph')
-parser.add_argument('--train', type=bool, default=True, help='training mode')
+parser.add_argument('--dataset', type=str, default='knowledge_graph', help='datasets: acm, dblp, texas, chameleon, acm00, acm01, acm02, acm03, acm04, acm05, knowledge_graph')
+parser.add_argument('--train', type=bool, default=False, help='training mode')
 parser.add_argument('--cuda_device', type=int, default=0, help='CUDA device number')
 parser.add_argument('--use_cuda', type=bool, default=True, help='use CUDA if available')
 args = parser.parse_args()
