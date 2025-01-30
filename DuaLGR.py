@@ -18,9 +18,11 @@ import matplotlib.pyplot as plt
 from visulization import plot_loss, plot_tsne
 import pandas as pd
 
+torch.autograd.set_detect_anomaly(True)  # Temporarily enable for debugging
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='knowledge_graph', help='datasets: acm, dblp, texas, chameleon, acm00, acm01, acm02, acm03, acm04, acm05, knowledge_graph')
-parser.add_argument('--train', type=bool, default=False, help='training mode')
+parser.add_argument('--train', type=bool, default=True, help='training mode')
 parser.add_argument('--cuda_device', type=int, default=0, help='CUDA device number')
 parser.add_argument('--use_cuda', type=bool, default=True, help='use CUDA if available')
 parser.add_argument('--subgraph_size', type=int, default=1000, help='number of nodes per subgraph')
@@ -78,9 +80,26 @@ if use_cuda:
     torch.cuda.manual_seed(random_seed)
     endecoder = endecoder.cuda()
     model = model.cuda()
-    adjs_labels = [adj_labels.cuda() for adj_labels in adjs_labels]
+    # Process adjacency matrices in batches
+    batch_size = subgraph_size  # Use subgraph_size as batch size
+    processed_adjs = []
+    for adj_labels in adjs_labels:
+        if adj_labels.shape[0] > batch_size:
+            # Process large adjacency matrices in chunks
+            chunks = []
+            for i in range(0, adj_labels.shape[0], batch_size):
+                end_idx = min(i + batch_size, adj_labels.shape[0])
+                chunk = adj_labels[i:end_idx, i:end_idx].cuda()
+                chunks.append(chunk)
+            processed_adjs.append(chunks)
+        else:
+            processed_adjs.append(adj_labels.cuda())
+    adjs_labels = processed_adjs
     shared_feature = shared_feature.cuda()
     shared_feature_label = shared_feature_label.cuda()
+    
+    # Free up some memory
+    torch.cuda.empty_cache()
 device = shared_feature.device
 
 if train:
@@ -101,10 +120,30 @@ if train:
         loss_re = 0.
         loss_a = 0.
 
-        a_pred, x_pred, z_norm = endecoder(shared_feature)
-        for v in range(graph_num):
-            loss_a += F.binary_cross_entropy(a_pred, adjs_labels[v])
-        loss_re += F.binary_cross_entropy(x_pred, shared_feature_label)
+        # Process in batches
+        for i in range(0, shared_feature.shape[0], subgraph_size):
+            end_idx = min(i + subgraph_size, shared_feature.shape[0])
+            batch_feature = shared_feature[i:end_idx]
+            batch_feature_label = shared_feature_label[i:end_idx]
+            
+            a_pred, x_pred, z_norm = endecoder(batch_feature)
+            
+            # Compute loss for adjacency matrix prediction
+            for v in range(graph_num):
+                if isinstance(adjs_labels[v], list):  # If adjacency matrix was chunked
+                    chunk_idx = i // subgraph_size
+                    if chunk_idx < len(adjs_labels[v]):
+                        batch_adj = adjs_labels[v][chunk_idx]
+                        loss_a += F.binary_cross_entropy(a_pred, batch_adj)
+                else:  # If adjacency matrix was small enough to fit in GPU
+                    batch_adj = adjs_labels[v][i:end_idx, i:end_idx]
+                    loss_a += F.binary_cross_entropy(a_pred, batch_adj)
+            
+            loss_re += F.binary_cross_entropy(x_pred, batch_feature_label)
+
+            # Free up memory
+            del a_pred, x_pred
+            torch.cuda.empty_cache()
 
         loss = loss_re + loss_a
         optimizer_endecoder.zero_grad()
@@ -114,8 +153,18 @@ if train:
 
         if epoch_num == pretrain - 1:
             print('Pretrain complete...')
+            # Process final embeddings in batches
+            all_z_norm = []
+            with torch.no_grad():
+                for i in range(0, shared_feature.shape[0], subgraph_size):
+                    end_idx = min(i + subgraph_size, shared_feature.shape[0])
+                    batch_feature = shared_feature[i:end_idx]
+                    _, _, batch_z_norm = endecoder(batch_feature)
+                    all_z_norm.append(batch_z_norm.cpu())
+            
+            z_norm = torch.cat(all_z_norm, dim=0)
             kmeans = KMeans(n_clusters=class_num, n_init=5)
-            y_pred = kmeans.fit_predict(z_norm.data.cpu().numpy())
+            y_pred = kmeans.fit_predict(z_norm.numpy())
             eva(y, y_pred, 'Kz')
             break
 
@@ -131,15 +180,36 @@ if train:
     best_a = [1e-12 for i in range(graph_num)]
     weights = normalize_weight(best_a)
 
+    # Initialize clustering
     with torch.no_grad():
         model.eval()
         pseudo_label = y_pred
-        a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+        all_z_all = []
+        # Process in batches
+        for i in range(0, shared_feature.shape[0], subgraph_size):
+            end_idx = min(i + subgraph_size, shared_feature.shape[0])
+            batch_feature = shared_feature[i:end_idx]
+            batch_adjs = []
+            for adj in adjs_labels:
+                if isinstance(adj, list):
+                    chunk_idx = i // subgraph_size
+                    if chunk_idx < len(adj):
+                        batch_adjs.append(adj[chunk_idx])
+                    else:
+                        batch_adjs.append(adj[-1])
+                else:
+                    batch_adjs.append(adj[i:end_idx, i:end_idx])
+            
+            batch_pseudo_label = pseudo_label[i:end_idx]  # Get batch pseudo labels
+            a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(batch_feature, batch_adjs, weights, batch_pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+            all_z_all.append(z_all[-1].cpu())
+
+        # Combine results from all batches
+        z_combined = torch.cat(all_z_all, dim=0)
         kmeans = KMeans(n_clusters=class_num, n_init=5)
+        y_pred = kmeans.fit_predict(z_combined.numpy())
         for v in range(graph_num+1):
-            y_pred = kmeans.fit_predict(z_all[v].data.cpu().numpy())
             model.cluster_layer[v].data = torch.tensor(kmeans.cluster_centers_).to(device)
-            # eva(y, y_pred, 'K{}'.format(v))
         pseudo_label = y_pred
 
     bad_count = 0
@@ -152,72 +222,133 @@ if train:
     nmi_list = []
     acc_list = []
     loss_list = []
+
     for epoch_num in range(epoch):
         model.train()
-
         loss_re = 0.
         loss_kl = 0.
         loss_re_a = 0.
         loss_re_ax = 0.
+        loss_re_x = 0.
 
-        subgraphs = create_subgraphs(shared_feature, adjs_labels, subgraph_size)
-        for subgraph in subgraphs:
-            sub_shared_feature, sub_adjs_labels = subgraph
+        # Process in batches
+        for i in range(0, shared_feature.shape[0], subgraph_size):
+            end_idx = min(i + subgraph_size, shared_feature.shape[0])
+            batch_feature = shared_feature[i:end_idx]
+            batch_adjs = []
+            for adj in adjs_labels:
+                if isinstance(adj, list):
+                    chunk_idx = i // subgraph_size
+                    if chunk_idx < len(adj):
+                        batch_adjs.append(adj[chunk_idx])
+                    else:
+                        batch_adjs.append(adj[-1])
+                else:
+                    batch_adjs.append(adj[i:end_idx, i:end_idx])
+            
+            # Get the correct subset of pseudo labels for this batch
+            batch_pseudo_label = pseudo_label[i:end_idx]
+            
+            optimizer_model.zero_grad()
+            
             try:
-                a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+                # Forward pass with batch_pseudo_label instead of full pseudo_label
+                a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(
+                    batch_feature, batch_adjs, weights, batch_pseudo_label, 
+                    alpha, quantize=quantize, varepsilon=varepsilon
+                )
+                
+                # KMeans clustering
+                kmeans = KMeans(n_clusters=class_num, n_init=5)
+                y_prim = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
+                batch_pseudo_label = y_prim
+                
+                # Update weights
+                for v in range(graph_num):
+                    y_pred = kmeans.fit_predict(z_all[v].detach().cpu().numpy())
+                    a = eva(y_prim, y_pred, visible=False, metrics='nmi')
+                    best_a[v] = a
+                
+                weights = normalize_weight(best_a, p=weight_soft)
+                
+                # Calculate KL divergence loss
+                p = model.target_distribution(q_all[-1].detach())  # Detach target distribution
+                kl_loss = torch.zeros(1, device=device)
+                for v in range(graph_num):
+                    kl_loss += F.kl_div(q_all[v].log(), p, reduction='batchmean')
+                kl_loss += F.kl_div(q_all[-1].log(), p, reduction='batchmean')
+                
+                # Calculate reconstruction losses
+                a_pred = torch.clamp(a_pred, 0, 1)
+                x_pred = torch.clamp(x_pred, 0, 1)
+                batch_feature = batch_feature.clamp(0, 1)
+                
+                recon_loss_a = torch.zeros(1, device=device)
+                for v in range(graph_num):
+                    batch_adj = batch_adjs[v].float().clamp(0, 1)
+                    recon_loss_a += F.binary_cross_entropy(a_pred, batch_adj)
+                
+                recon_loss_x = F.binary_cross_entropy(x_pred, batch_feature)
+                
+                # Combine losses
+                total_loss = recon_loss_a + recon_loss_x + kl_loss
+                
+                # Backward pass and optimization
+                total_loss.backward()
+                optimizer_model.step()
+                
+                # Update metrics
+                loss_re_a += recon_loss_a.item()
+                loss_re_x += recon_loss_x.item()
+                loss_kl += kl_loss.item()
+                loss_re = loss_re_a + loss_re_x
+                
+                # Update global pseudo_label
+                pseudo_label[i:end_idx] = y_prim
+                
             except RuntimeError as e:
                 if 'CUDA out of memory' in str(e):
                     print("CUDA out of memory. Reducing batch size and retrying...")
-                    batch_size = sub_shared_feature.size(0) // 2
-                    sub_shared_feature = sub_shared_feature[:batch_size]
-                    sub_adjs_labels = [adj[:batch_size, :batch_size] for adj in sub_adjs_labels]
+                    torch.cuda.empty_cache()
+                    new_end_idx = i + (end_idx - i) // 2
                     continue
                 else:
                     raise e
 
-            for v in range(graph_num):
-                loss_re_a += F.binary_cross_entropy(a_pred, sub_adjs_labels[v])
-            loss_re_x = F.binary_cross_entropy(x_pred, sub_shared_feature)
-            loss_re += loss_re_a + loss_re_x
-
-            kmeans = KMeans(n_clusters=class_num, n_init=5)
-            y_prim = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-            pseudo_label = y_prim
-
-            for v in range(graph_num):
-                y_pred = kmeans.fit_predict(z_all[v].detach().cpu().numpy())
-                a = eva(y_prim, y_pred, visible=False, metrics='nmi')
-                best_a[v] = a
-
-            weights = normalize_weight(best_a, p=weight_soft)
-            # print(weights)
-
-
-            p = model.target_distribution(q_all[-1])
-            for v in range(graph_num):
-                loss_kl += F.kl_div(q_all[v].log(), p, reduction='batchmean')
-            loss_kl += F.kl_div(q_all[-1].log(), p, reduction='batchmean')
-
-            loss = loss_re + loss_kl
-            loss_list.append(loss.item())
-            optimizer_model.zero_grad()
-            loss.backward()
-            optimizer_model.step()
-
-            print('epoch: {}, loss: {}, loss_re: {}, loss_kl:{}, badcount: {}, loss_re_a: {}, loss_re_x: {}'. format(epoch_num, loss, loss_re, loss_kl, bad_count, loss_re_a, loss_re_x))
-
-    # =========================================evaluation=============================================================
+            print('epoch: {}, loss: {:.4f}, loss_re: {:.4f}, loss_kl: {:.4f}, loss_re_a: {:.4f}, loss_re_x: {:.4f}, badcount: {}'.format(
+                epoch_num, total_loss.item(), loss_re, loss_kl, loss_re_a, loss_re_x, bad_count))
         if epoch_num % update_interval == 0:
             model.eval()
             with torch.no_grad():
+                # Create subgraphs first
+                subgraphs = create_subgraphs(shared_feature, adjs_labels, subgraph_size)
+                
+                # Initialize metrics for all subgraphs
+                all_predictions = []
+                
                 for subgraph in subgraphs:
                     sub_shared_feature, sub_adjs_labels = subgraph
-                    a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+                    a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(
+                        sub_shared_feature, 
+                        sub_adjs_labels, 
+                        weights, 
+                        pseudo_label, 
+                        alpha, 
+                        quantize=quantize, 
+                        varepsilon=varepsilon
+                    )
+                    
                     kmeans = KMeans(n_clusters=class_num, n_init=5)
                     y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-                    nmi, acc, ari, f1 = eva(y, y_eval, str(epoch_num) + 'Kz')
-                    nmi_list.append(nmi)
-                    acc_list.append(acc)
+                    all_predictions.extend(y_eval)
+                
+                # Convert predictions to numpy array
+                all_predictions = np.array(all_predictions)
+                
+                # Evaluate on the complete predictions
+                nmi, acc, ari, f1 = eva(y, all_predictions, str(epoch_num) + 'Kz')
+                nmi_list.append(nmi)
+                acc_list.append(acc)
 
         if acc > best_acc:
             if os.path.exists('./pkl/dualgr_{}_acc{:.4f}.pkl'.format(dataset, best_acc)):
@@ -261,13 +392,37 @@ model.load_state_dict(state_dic)
 model.eval()
 with torch.no_grad():
     model.endecoder = endecoder
-    subgraphs = create_subgraphs(shared_feature, adjs_labels, subgraph_size)
-    for subgraph in subgraphs:
-        sub_shared_feature, sub_adjs_labels = subgraph
-        a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(sub_shared_feature, sub_adjs_labels, weights, pseudo_label, alpha,quantize=quantize, varepsilon=varepsilon)
+    all_predictions = []
+    
+    for i in range(0, shared_feature.shape[0], subgraph_size):
+        end_idx = min(i + subgraph_size, shared_feature.shape[0])
+        batch_feature = shared_feature[i:end_idx]
+        batch_adjs = []
+        for adj in adjs_labels:
+            if isinstance(adj, list):
+                chunk_idx = i // subgraph_size
+                if chunk_idx < len(adj):
+                    batch_adjs.append(adj[chunk_idx])
+                else:
+                    batch_adjs.append(adj[-1])
+            else:
+                batch_adjs.append(adj[i:end_idx, i:end_idx])
+        
+        # Get the correct subset of pseudo labels
+        batch_pseudo_label = pseudo_label[i:end_idx]
+        
+        a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(
+            batch_feature, batch_adjs, weights, batch_pseudo_label, 
+            alpha, quantize=quantize, varepsilon=varepsilon
+        )
+        
         kmeans = KMeans(n_clusters=class_num, n_init=5)
         y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
-        nmi, acc, ari, f1 = eva(y, y_eval, 'Final Kz')
+        all_predictions.extend(y_eval)
+    
+    # Evaluate using all predictions
+    all_predictions = np.array(all_predictions)
+    nmi, acc, ari, f1 = eva(y, all_predictions, 'Final Kz')
 
     # Save clustering results to CSV
     clustering_results = pd.DataFrame({'Node': range(len(y_eval)), 'Cluster': y_eval})

@@ -748,14 +748,46 @@ def load_knowledge_graph(path):
 
     return labels, [adj_matrix_1, adj_matrix_2], feature_matrix, feature_matrix, 2
 
-def create_subgraphs(feature_matrix, adj_matrices, subgraph_size):
-    num_nodes = feature_matrix.size(0)
+def create_subgraphs(features, adj_matrices, subgraph_size):
+    """
+    Create subgraphs from features and adjacency matrices, handling both regular tensors
+    and pre-chunked adjacency matrices.
+    
+    Args:
+        features: Feature tensor
+        adj_matrices: List of adjacency matrices (can be tensors or lists of chunks)
+        subgraph_size: Size of each subgraph
+    
+    Returns:
+        List of tuples (subgraph_features, subgraph_adj_matrices)
+    """
+    num_nodes = features.shape[0]
     subgraphs = []
-
+    
     for start in range(0, num_nodes, subgraph_size):
         end = min(start + subgraph_size, num_nodes)
-        sub_feature_matrix = feature_matrix[start:end]
-        sub_adj_matrices = [adj[start:end, start:end] for adj in adj_matrices]
-        subgraphs.append((sub_feature_matrix, sub_adj_matrices))
-
+        sub_features = features[start:end]
+        
+        sub_adj_matrices = []
+        for adj in adj_matrices:
+            if isinstance(adj, list):  # If adj is already chunked
+                chunk_idx = start // subgraph_size
+                if chunk_idx < len(adj):
+                    sub_adj = adj[chunk_idx]
+                    # If the chunk is larger than needed, slice it
+                    if sub_adj.shape[0] > (end - start):
+                        sub_adj = sub_adj[:(end - start), :(end - start)]
+                    sub_adj_matrices.append(sub_adj)
+                else:
+                    # If we're beyond available chunks, use the last chunk
+                    sub_adj = adj[-1]
+                    if sub_adj.shape[0] > (end - start):
+                        sub_adj = sub_adj[:(end - start), :(end - start)]
+                    sub_adj_matrices.append(sub_adj)
+            else:  # If adj is a regular tensor
+                sub_adj = adj[start:end, start:end]
+                sub_adj_matrices.append(sub_adj)
+        
+        subgraphs.append((sub_features, sub_adj_matrices))
+    
     return subgraphs
