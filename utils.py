@@ -729,9 +729,12 @@ def load_knowledge_graph(path):
     for _, row in relationships_df.iterrows():
         G.add_edge(row["_start"], row["_end"], type=row["_type"])
 
-    # Create adjacency matrix
-    adj_matrix = nx.adjacency_matrix(G)
-    adj_matrix = torch.FloatTensor(adj_matrix.todense())
+    # Create adjacency matrices for different views
+    adj_matrix_1 = nx.adjacency_matrix(G)
+    adj_matrix_1 = torch.FloatTensor(adj_matrix_1.todense())
+
+    adj_matrix_2 = adj_matrix_1.clone()
+    adj_matrix_2[adj_matrix_2 > 0] = 1  # Binary adjacency matrix for the second view
 
     # Create feature matrix
     feature_matrix = np.zeros((len(G.nodes), 300))  # Assuming 300-dimensional features
@@ -743,4 +746,4 @@ def load_knowledge_graph(path):
     # Create labels (dummy labels for now)
     labels = torch.LongTensor(np.random.randint(0, 5, len(G.nodes)))  # Assuming 5 classes
 
-    return labels, [adj_matrix], feature_matrix, feature_matrix, 1
+    return labels, [adj_matrix_1, adj_matrix_2], feature_matrix, feature_matrix, 2

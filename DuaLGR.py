@@ -82,6 +82,9 @@ if use_cuda:
 device = shared_feature.device
 
 if train:
+    # Clear GPU cache before training
+    torch.cuda.empty_cache()
+
     # =============================================== pretrain endecoder ============================
     print('shared_feature_label for clustering...')
     kmeans = KMeans(n_clusters=class_num, n_init=5)
@@ -155,7 +158,19 @@ if train:
         loss_re_a = 0.
         loss_re_ax = 0.
 
-        a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+        try:
+            a_pred, x_pred, z_all, q_all, a_pred_x, x_pred_x = model(shared_feature, adjs_labels, weights, pseudo_label, alpha, quantize=quantize, varepsilon=varepsilon)
+        except RuntimeError as e:
+            if 'CUDA out of memory' in str(e):
+                print("CUDA out of memory. Reducing batch size and retrying...")
+                batch_size = shared_feature.size(0) // 2
+                shared_feature = shared_feature[:batch_size]
+                shared_feature_label = shared_feature_label[:batch_size]
+                adjs_labels = [adj[:batch_size, :batch_size] for adj in adjs_labels]
+                continue
+            else:
+                raise e
+
         for v in range(graph_num):
             loss_re_a += F.binary_cross_entropy(a_pred, adjs_labels[v])
         loss_re_x = F.binary_cross_entropy(x_pred, shared_feature_label)

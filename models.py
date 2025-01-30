@@ -60,7 +60,7 @@ class GraphEncoder(nn.Module):
         r_inv = D.pow(-1).flatten()
         r_inv = r_inv.reshape((x.shape[0], -1))
         r_inv[torch.isinf(r_inv)] = 0.
-        x = x * r_inv
+        x.mul_(r_inv)  # In-place operation
         return x
 
 
@@ -107,7 +107,7 @@ class DuaLGR(nn.Module):
                 order.append(0)
             else:
                 od = int(np.floor(1 / (1 - r + 1e-9)))
-                if od >= 8:
+                if (od >= 8):
                     od = 8
                 order.append(od)
 
@@ -159,7 +159,7 @@ class DuaLGR(nn.Module):
         r_inv = D.pow(-1).flatten()
         r_inv = r_inv.reshape((x.shape[0], -1))
         r_inv[torch.isinf(r_inv)] = 0.
-        x = x * r_inv
+        x.mul_(r_inv)  # In-place operation
         return x
 
 
@@ -175,7 +175,3 @@ class GNN(nn.Module):
         a_pred = torch.sigmoid(torch.mm(z_norm, z_norm.t()))
         x_pred = torch.sigmoid(self.dec(F.relu(z), dropout=False))
         return z_norm, a_pred, x_pred
-
-
-
-
