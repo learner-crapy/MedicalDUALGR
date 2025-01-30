@@ -99,7 +99,14 @@ class DuaLGR(nn.Module):
         omega[omega > quantize] = 1
         omega[omega <= quantize] = 0
 
-        homo_r = [cal_homo_ratio(adjs[v].detach().cpu().numpy(), np.asarray(pseudo_label), True) for v in range(self.num_view)]
+        homo_r = []
+        for v in range(self.num_view):
+            adj = adjs[v]
+            if isinstance(adj, list):  # If adjacency matrix was chunked
+                for chunk in adj:
+                    homo_r.append(cal_homo_ratio(chunk.detach().cpu().numpy(), np.asarray(pseudo_label), True))
+            else:
+                homo_r.append(cal_homo_ratio(adj.detach().cpu().numpy(), np.asarray(pseudo_label), True))
 
         order = []
         for r in homo_r:
@@ -111,7 +118,16 @@ class DuaLGR(nn.Module):
                     od = 8
                 order.append(od)
 
-        adj_refine = [self.get_A_with_order(omega, 1) + alpha * self.get_A_with_order(adjs[v], order[v]) for v in range(self.num_view)]
+        adj_refine = []
+        for v in range(self.num_view):
+            adj = adjs[v]
+            if isinstance(adj, list):  # If adjacency matrix was chunked
+                refined_chunks = []
+                for chunk in adj:
+                    refined_chunks.append(self.get_A_with_order(omega, 1) + alpha * self.get_A_with_order(chunk, order[v]))
+                adj_refine.append(refined_chunks)
+            else:
+                adj_refine.append(self.get_A_with_order(omega, 1) + alpha * self.get_A_with_order(adj, order[v]))
 
         S = sum(w[v] * adj_refine[v] for v in range(self.num_view)) / sum(w)
 
