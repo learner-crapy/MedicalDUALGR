@@ -10,7 +10,7 @@ from torch.optim import Adam
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 
-from utils import load_data, normalize_weight, cal_homo_ratio
+from utils import load_data, normalize_weight, cal_homo_ratio, load_knowledge_graph
 from models import EnDecoder, DuaLGR, GNN
 from evaluation import eva
 from settings import get_settings
@@ -19,7 +19,7 @@ from visulization import plot_loss, plot_tsne
 import pandas as pd
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='acm', help='datasets: acm, dblp, texas, chameleon, acm00, acm01, acm02, acm03, acm04, acm05')
+parser.add_argument('--dataset', type=str, default='acm', help='datasets: acm, dblp, texas, chameleon, acm00, acm01, acm02, acm03, acm04, acm05, knowledge_graph')
 parser.add_argument('--train', type=bool, default=True, help='training mode')
 parser.add_argument('--cuda_device', type=int, default=0, help='')
 parser.add_argument('--use_cuda', type=bool, default=True, help='')
@@ -52,7 +52,10 @@ update_interval = settings.update_interval
 random_seed = settings.random_seed
 torch.manual_seed(random_seed)
 
-labels, adjs_labels, shared_feature, shared_feature_label, graph_num = load_data(dataset, path)
+if dataset == 'knowledge_graph':
+    labels, adjs_labels, shared_feature, shared_feature_label, graph_num = load_knowledge_graph(path)
+else:
+    labels, adjs_labels, shared_feature, shared_feature_label, graph_num = load_data(dataset, path)
 
 for v in range(graph_num):
     r = cal_homo_ratio(adjs_labels[v].cpu().numpy(), labels.cpu().numpy(), self_loop=True)
@@ -242,5 +245,8 @@ with torch.no_grad():
     y_eval = kmeans.fit_predict(z_all[-1].detach().cpu().numpy())
     nmi, acc, ari, f1 = eva(y, y_eval, 'Final Kz')
 
-print('Test complete...')
+    # Save clustering results to CSV
+    clustering_results = pd.DataFrame({'Node': range(len(y_eval)), 'Cluster': y_eval})
+    clustering_results.to_csv('clustering_results.csv', index=False)
 
+print('Test complete...')

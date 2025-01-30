@@ -167,7 +167,6 @@ def load_planetoid(dataset, path):
         tx = tx_extended
         ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))
         ty_extended[test_idx_range - min(test_idx_range), :] = ty
-        ty = ty_extended
 
     features_unorm = sp.vstack((allx, tx)).tolil()
     features_unorm[test_idx_reorder, :] = features_unorm[test_idx_range, :]
@@ -569,7 +568,8 @@ def load_data(dataset, path):
         labels, adjs_labels, shared_feature, shared_feature_label, num_graph = load_synthetic_data(r=0.40, path=path)
     elif dataset == 'acm05':
         labels, adjs_labels, shared_feature, shared_feature_label, num_graph = load_synthetic_data(r=0.50, path=path)
-
+    elif dataset == 'knowledge_graph':
+        labels, adjs_labels, shared_feature, shared_feature_label, num_graph = load_knowledge_graph(path)
     else:
         assert 'Dataset is not exist.'
     return labels, adjs_labels, shared_feature, shared_feature_label, num_graph
@@ -707,3 +707,40 @@ def load_synthetic_data(r=0.00, path='./data/'):
     graph_num = len(adjs_labels)
     return labels, adjs_labels, shared_feature, shared_feature_label, graph_num
 
+def load_knowledge_graph(path):
+    # Load nodes
+    nodes_df = pd.read_csv(f"{path}/exports_en.csv")
+    nodes_df.fillna("", inplace=True)
+    nodes_df["_id"] = nodes_df["_id"].astype(str)
+
+    # Load relationships
+    relationships_df = pd.read_csv(f"{path}/exports_re.csv")
+    relationships_df["_start"] = relationships_df["_start"].astype(str)
+    relationships_df["_end"] = relationships_df["_end"].astype(str)
+
+    # Create a directed graph
+    G = nx.DiGraph()
+
+    # Add nodes
+    for _, row in nodes_df.iterrows():
+        G.add_node(row["_id"], label=row["_labels"], content=row["content"], desc=row["desc"], name=row["name"], semanticType=row["semanticType"])
+
+    # Add edges
+    for _, row in relationships_df.iterrows():
+        G.add_edge(row["_start"], row["_end"], type=row["_type"])
+
+    # Create adjacency matrix
+    adj_matrix = nx.adjacency_matrix(G)
+    adj_matrix = torch.FloatTensor(adj_matrix.todense())
+
+    # Create feature matrix
+    feature_matrix = np.zeros((len(G.nodes), 300))  # Assuming 300-dimensional features
+    for i, node in enumerate(G.nodes(data=True)):
+        feature_matrix[i] = np.random.rand(300)  # Random features for now
+
+    feature_matrix = torch.FloatTensor(feature_matrix)
+
+    # Create labels (dummy labels for now)
+    labels = torch.LongTensor(np.random.randint(0, 5, len(G.nodes)))  # Assuming 5 classes
+
+    return labels, [adj_matrix], feature_matrix, feature_matrix, 1
