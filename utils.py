@@ -659,6 +659,12 @@ def cal_homo_ratio(adj, label, self_loop=True):
     if self_loop:
         adj = adj - np.eye(adj.shape[0])
 
+    # Ensure compatibility of matrix dimensions
+    if adj.shape != adj_y.shape:
+        min_dim = min(adj.shape[0], adj_y.shape[0])
+        adj = adj[:min_dim, :min_dim]
+        adj_y = adj_y[:min_dim, :min_dim]
+
     homo = np.sum(adj_y * adj)
     homo_ratio = homo / (np.sum(adj))
     return homo_ratio
