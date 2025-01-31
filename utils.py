@@ -16,7 +16,14 @@ import itertools
 from sklearn.neighbors import NearestNeighbors
 from torch_cluster import knn_graph
 import h5py
+from pymilvus import model
 
+
+sentence_transformer_ef = model.dense.SentenceTransformerEmbeddingFunction(
+    model_name=args.model_name,  # Specify the model name
+    device='cuda:0',  # Specify the device to use, e.g., 'cpu' or 'cuda:0'
+    normalize_embeddings=True  # This will help with consistency
+)
 ''' Compute Personalized Page Ranking'''
 
 
@@ -797,3 +804,44 @@ def create_subgraphs(features, adj_matrices, subgraph_size):
         subgraphs.append((sub_features, sub_adj_matrices))
     
     return subgraphs
+
+
+def encode_text(text, model_type, embedding_dim, tokenizer, model, sentence_transformer_ef):
+
+    if model_type == 'bert':
+        inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True,
+                           max_length=embedding_dim)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+        if embedding.ndim == 1:
+            embedding = embedding.reshape(1, -1)
+        if embedding.shape[1] < embedding_dim:
+            padding = np.zeros((embedding.shape[0], embedding_dim - embedding.shape[1]))
+            embedding = np.concatenate([embedding, padding], axis=1)
+        elif embedding.shape[1] > embedding_dim:
+            embedding = embedding[:, :embedding_dim]
+        return embedding.squeeze()
+
+    elif model_type == 'sentence-transformer':
+        vectors = sentence_transformer_ef.encode_documents([text])
+        vectors = pad_or_truncate_vector(vectors, embedding_dim)
+        return vectors
+
+    else:
+        raise ValueError(f"Model type '{model_type}' not supported")
+
+def pad_or_truncate_vector(vector, target_size=512):
+    vector = np.array(vector)
+    if vector.ndim == 1:
+        vector = vector.reshape(1, -1)
+
+    if vector.shape[1] < target_size:
+        padding = np.zeros((vector.shape[0], target_size - vector.shape[1]))
+        vector = np.concatenate([vector, padding], axis=1)
+    elif vector.shape[1] > target_size:
+        vector = vector[:, :target_size]
+
+    # Normalize the vector
+    vector = normalize(vector)
+    return vector.squeeze()
