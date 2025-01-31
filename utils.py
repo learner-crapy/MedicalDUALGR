@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import sys
 
@@ -18,9 +19,8 @@ from torch_cluster import knn_graph
 import h5py
 from pymilvus import model
 
-
 sentence_transformer_ef = model.dense.SentenceTransformerEmbeddingFunction(
-    model_name=args.model_name,  # Specify the model name
+    model_name="all-distilroberta-v1",  # Specify the model name
     device='cuda:0',  # Specify the device to use, e.g., 'cpu' or 'cuda:0'
     normalize_embeddings=True  # This will help with consistency
 )
@@ -152,7 +152,7 @@ def parse_index_file(filename):
 def load_planetoid(dataset, path):
     path = path + dataset
     print('data loading.....')
-    names = ['x', 'y', tx', 'ty', 'allx', 'ally', 'graph']
+    names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
     objects = []
     for i in range(len(names)):
         with open("{}/ind.{}.{}".format(path, dataset, names[i]), 'rb') as f:
@@ -562,7 +562,8 @@ def load_data(dataset, path):
         shared_feature_label = feature_label
 
     elif dataset in ['chameleon', 'texas', 'squirrel']:
-        labels, adjs, features, adjs_labels, feature_labels, shared_feature, shared_feature_label, num_graph = load_hete_data(dataset, 1)
+        labels, adjs, features, adjs_labels, feature_labels, shared_feature, shared_feature_label, num_graph = load_hete_data(
+            dataset, 1)
     elif dataset == 'acm00':
         labels, adjs_labels, shared_feature, shared_feature_label, num_graph = load_synthetic_data(r=0.00, path=path)
     elif dataset == 'acm01':
@@ -635,7 +636,7 @@ def bin_kl_div(target, input, eps=1e-10):
     input_ = 1 - input
     target_ = 1 - target
     kl = target * (torch.log(target + eps) - torch.log(input + eps)) + target_ * (
-                torch.log(target_ + eps) - torch.log(input_ + eps))
+            torch.log(target_ + eps) - torch.log(input_ + eps))
     return kl.mean()
 
 
@@ -706,6 +707,7 @@ def load_hete_data(dataset, self_loop):
     num_graph = 2
     return label, adjs, features, adjs_labels, feature_labels, shared_feature, shared_feature_label, num_graph
 
+
 def load_synthetic_data(r=0.00, path='./data/'):
     dataset = 'acm_hete_r{:.2f}.npz'.format(r)
     acm_dataset = np.load(path + dataset)
@@ -720,19 +722,53 @@ def load_synthetic_data(r=0.00, path='./data/'):
     graph_num = len(adjs_labels)
     return labels, adjs_labels, shared_feature, shared_feature_label, graph_num
 
+
 def load_knowledge_graph(path):
     # Load nodes
     nodes_df = pd.read_csv(f"{path}/exports_en.csv")
     nodes_df.fillna("", inplace=True)
     nodes_df["_id"] = nodes_df["_id"].astype(str)
 
+    # Check if embeddings already exist
+    embedding_path = f"{path}/node_embeddings_512d.npy"
+    if os.path.exists(embedding_path):
+        print("Loading existing embeddings...")
+        feature_matrix = torch.FloatTensor(np.load(embedding_path))
+        # import pdb
+        # pdb.set_trace()
+    else:
+        print("Creating new embeddings...")
+        # Create feature matrix using text embeddings
+        feature_matrix = np.zeros((len(nodes_df), 512))
+
+        for i, row in nodes_df.iterrows():
+            # Combine node attributes into a single text
+            text = f"{row['_labels']}, {row['name']}, {row['semanticType']}, {row['content']}, {row['desc']}"
+            # Encode the text
+            feature_matrix[i] = encode_text(
+                text,
+                model_type='sentence-transformer',
+                embedding_dim=512,
+                tokenizer=None,
+                model=None,
+                sentence_transformer_ef=sentence_transformer_ef
+            )
+            print(f"{text=}")
+
+            if i % 100 == 0:
+                print(f"Processed {i}/{len(nodes_df)} nodes")
+
+        # Save embeddings
+        np.save(embedding_path, feature_matrix)
+        feature_matrix = torch.FloatTensor(feature_matrix)
+
     # Load relationships
     relationships_df = pd.read_csv(f"{path}/exports_re.csv")
     relationships_df["_start"] = relationships_df["_start"].astype(str)
     relationships_df["_end"] = relationships_df["_end"].astype(str)
 
-    # Load cluster data
-    cluster_df = pd.read_csv(f"{path}/Do/cluster_analysis_sentence-transformer_all-distilroberta-v1.csv")
+    # Load cluster data for relationship mapping
+    cluster_df = pd.read_csv(f"./Do/cluster_analysis_sentence-transformer_all-distilroberta-v1.csv")
     cluster_map = {}
     for _, row in cluster_df.iterrows():
         cluster_content = row["cluster_content"].split()
@@ -741,59 +777,128 @@ def load_knowledge_graph(path):
             content = content.split('(')[0]  # Remove the (*) part
             cluster_map[content] = center
 
-    # Create a directed graph
-    G = nx.DiGraph()
+    # Create heterogeneous graph
+    hetero_graph = nx.MultiDiGraph()
 
     # Add nodes
     for _, row in nodes_df.iterrows():
-        G.add_node(row["_id"], label=row["_labels"], content=row["content"], desc=row["desc"], name=row["name"], semanticType=row["semanticType"])
+        hetero_graph.add_node(row["_id"], label=row["_labels"], content=row["content"], desc=row["desc"],
+                              name=row["name"], semanticType=row["semanticType"])
 
-    # Add edges with relationship replacement
+    # Add edges with relationship mapping
     for _, row in relationships_df.iterrows():
         relationship_type = row["_type"]
         if relationship_type in cluster_map:
             relationship_type = cluster_map[relationship_type]
-        G.add_edge(row["_start"], row["_end"], type=relationship_type)
+        hetero_graph.add_edge(row["_start"], row["_end"], type=relationship_type)
 
-    # Create adjacency matrices for different views
-    adj_matrix_1 = nx.adjacency_matrix(G)
-    adj_matrix_1 = torch.FloatTensor(adj_matrix_1.todense())
+    # Get all unique edge types after mapping
+    edge_types = list(set(nx.get_edge_attributes(hetero_graph, 'type').values()))
+    print(f"Found edge types after clustering: {edge_types}")
+    print(f"Number of edge types: {len(edge_types)}")
 
-    adj_matrix_2 = adj_matrix_1.clone()
-    adj_matrix_2[adj_matrix_2 > 0] = 1  # Binary adjacency matrix for the second view
+    # Create multi-adjacency matrices for different edge types
+    adj_matrices, node_index = create_multi_adj_matrix(hetero_graph, edge_types, path)
 
-    # Create feature matrix
-    feature_matrix = np.zeros((len(G.nodes), 300))  # Assuming 300-dimensional features
-    for i, node in enumerate(G.nodes(data=True)):
-        feature_matrix[i] = np.random.rand(300)  # Random features for now
+    # Convert adjacency matrices to PyTorch tensors
+    adj_matrices_list = [torch.FloatTensor(adj_matrices[edge_type]) for edge_type in edge_types]
 
-    feature_matrix = torch.FloatTensor(feature_matrix)
+    # Number of views equals number of edge types
+    num_views = len(edge_types)
 
     # Create labels (dummy labels for now)
-    labels = torch.LongTensor(np.random.randint(0, 5, len(G.nodes)))  # Assuming 5 classes
+    labels = torch.LongTensor(np.random.randint(0, 5, len(hetero_graph.nodes)))
 
-    return labels, [adj_matrix_1, adj_matrix_2], feature_matrix, feature_matrix, 2
+    return labels, adj_matrices_list, feature_matrix, feature_matrix, num_views
+
+
+def create_multi_adj_matrix(hetero_graph, edge_types, path='./data/'):
+    """
+    Create multiple adjacency matrices for different edge types in a heterogeneous graph.
+    Results are cached to avoid recomputation.
+
+    Args:
+        hetero_graph: NetworkX MultiDiGraph
+        edge_types: List of edge types to create matrices for
+        path: Path to save/load cached results
+
+    Returns:
+        dict: Dictionary mapping edge types to adjacency matrices
+        dict: Dictionary mapping node IDs to matrix indices
+    """
+    # Create cache filename based on graph properties
+    cache_file = f"{path}/adj_matrices_cache.npz"
+
+    # Try to load from cache first
+    if os.path.exists(cache_file):
+        print("Loading adjacency matrices from cache...")
+        cached_data = np.load(cache_file, allow_pickle=True)
+        adj_matrices = cached_data['adj_matrices'].item()
+        node_index = cached_data['node_index'].item()
+        cached_edge_types = cached_data['edge_types']
+
+        # Verify edge types match
+        if set(edge_types) == set(cached_edge_types):
+            print("Successfully loaded from cache")
+            return adj_matrices, node_index
+        else:
+            print("Cache edge types don't match, recomputing...")
+
+    # If no cache or invalid cache, compute matrices
+    print("Computing adjacency matrices...")
+    nodes = list(hetero_graph.nodes())
+    node_index = {node: idx for idx, node in enumerate(nodes)}
+    n = len(nodes)
+    # import pdb
+    # pdb.set_trace()
+    # Initialize adjacency matrices for each edge type
+    adj_matrices = {}
+    for edge_type in edge_types:
+        adj_matrices[edge_type] = np.zeros((n, n))
+
+    # Fill adjacency matrices
+    for u, v, data in hetero_graph.edges(data=True):
+        edge_type = data['type']
+        print(f"{u=}, {v=}, {edge_type=}")
+        if edge_type in edge_types:
+            i, j = node_index[u], node_index[v]
+            adj_matrices[edge_type][i, j] = 1
+
+    # Normalize adjacency matrices
+    for idx, edge_type in enumerate(edge_types):
+        print(f"Normalizing adjacency matrix for index {idx}, edge type {edge_type}...")
+        adj_matrices[edge_type] = normalize_adj(adj_matrices[edge_type])
+
+    # Save to cache
+    print("Saving adjacency matrices to cache...")
+    np.savez(cache_file,
+             adj_matrices=adj_matrices,
+             node_index=node_index,
+             edge_types=edge_types)
+
+    return adj_matrices, node_index
+
 
 def create_subgraphs(features, adj_matrices, subgraph_size):
     """
     Create subgraphs from features and adjacency matrices, handling both regular tensors
     and pre-chunked adjacency matrices.
-    
+
     Args:
         features: Feature tensor
         adj_matrices: List of adjacency matrices (can be tensors or lists of chunks)
         subgraph_size: Size of each subgraph
-    
+
     Returns:
         List of tuples (subgraph_features, subgraph_adj_matrices)
     """
     num_nodes = features.shape[0]
     subgraphs = []
-    
+
     for start in range(0, num_nodes, subgraph_size):
         end = min(start + subgraph_size, num_nodes)
         sub_features = features[start:end]
-        
+
         sub_adj_matrices = []
         for adj in adj_matrices:
             if isinstance(adj, list):  # If adj is already chunked
@@ -813,19 +918,14 @@ def create_subgraphs(features, adj_matrices, subgraph_size):
             else:  # If adj is a regular tensor
                 sub_adj = adj[start:end, start:end]
                 sub_adj_matrices.append(sub_adj)
-        
+
         subgraphs.append((sub_features, sub_adj_matrices))
-    
+
     return subgraphs
 
 
 def encode_text(text, model_type, embedding_dim, tokenizer, model, sentence_transformer_ef):
     # Create a unique filename for the npy file based on the text
-    filename = f"embeddings/{hash(text)}.npy"
-
-    # Check if the embedding already exists
-    if os.path.exists(filename):
-        return np.load(filename)
 
     if model_type == 'bert':
         inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True,
@@ -840,17 +940,16 @@ def encode_text(text, model_type, embedding_dim, tokenizer, model, sentence_tran
             embedding = np.concatenate([embedding, padding], axis=1)
         elif embedding.shape[1] > embedding_dim:
             embedding = embedding[:, :embedding_dim]
-        np.save(filename, embedding)  # Save the embedding
         return embedding.squeeze()
 
     elif model_type == 'sentence-transformer':
         vectors = sentence_transformer_ef.encode_documents([text])
         vectors = pad_or_truncate_vector(vectors, embedding_dim)
-        np.save(filename, vectors)  # Save the embedding
         return vectors
 
     else:
         raise ValueError(f"Model type '{model_type}' not supported")
+
 
 def pad_or_truncate_vector(vector, target_size=512):
     vector = np.array(vector)
