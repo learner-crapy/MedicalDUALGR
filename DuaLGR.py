@@ -10,7 +10,7 @@ from torch.optim import Adam
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 
-from utils import load_data, normalize_weight, cal_homo_ratio, load_knowledge_graph, create_subgraphs
+from utils import load_data, normalize_weight, cal_homo_ratio, load_knowledge_graph, create_subgraphs, encode_text
 from models import EnDecoder, DuaLGR, GNN
 from evaluation import eva
 from settings import get_settings
