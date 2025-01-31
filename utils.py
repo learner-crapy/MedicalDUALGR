@@ -152,7 +152,7 @@ def parse_index_file(filename):
 def load_planetoid(dataset, path):
     path = path + dataset
     print('data loading.....')
-    names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
+    names = ['x', 'y', tx', 'ty', 'allx', 'ally', 'graph']
     objects = []
     for i in range(len(names)):
         with open("{}/ind.{}.{}".format(path, dataset, names[i]), 'rb') as f:
@@ -731,6 +731,16 @@ def load_knowledge_graph(path):
     relationships_df["_start"] = relationships_df["_start"].astype(str)
     relationships_df["_end"] = relationships_df["_end"].astype(str)
 
+    # Load cluster data
+    cluster_df = pd.read_csv(f"{path}/Do/cluster_analysis_sentence-transformer_all-distilroberta-v1.csv")
+    cluster_map = {}
+    for _, row in cluster_df.iterrows():
+        cluster_content = row["cluster_content"].split()
+        center = row["center"]
+        for content in cluster_content:
+            content = content.split('(')[0]  # Remove the (*) part
+            cluster_map[content] = center
+
     # Create a directed graph
     G = nx.DiGraph()
 
@@ -738,9 +748,12 @@ def load_knowledge_graph(path):
     for _, row in nodes_df.iterrows():
         G.add_node(row["_id"], label=row["_labels"], content=row["content"], desc=row["desc"], name=row["name"], semanticType=row["semanticType"])
 
-    # Add edges
+    # Add edges with relationship replacement
     for _, row in relationships_df.iterrows():
-        G.add_edge(row["_start"], row["_end"], type=row["_type"])
+        relationship_type = row["_type"]
+        if relationship_type in cluster_map:
+            relationship_type = cluster_map[relationship_type]
+        G.add_edge(row["_start"], row["_end"], type=relationship_type)
 
     # Create adjacency matrices for different views
     adj_matrix_1 = nx.adjacency_matrix(G)
@@ -807,6 +820,12 @@ def create_subgraphs(features, adj_matrices, subgraph_size):
 
 
 def encode_text(text, model_type, embedding_dim, tokenizer, model, sentence_transformer_ef):
+    # Create a unique filename for the npy file based on the text
+    filename = f"embeddings/{hash(text)}.npy"
+
+    # Check if the embedding already exists
+    if os.path.exists(filename):
+        return np.load(filename)
 
     if model_type == 'bert':
         inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True,
@@ -821,11 +840,13 @@ def encode_text(text, model_type, embedding_dim, tokenizer, model, sentence_tran
             embedding = np.concatenate([embedding, padding], axis=1)
         elif embedding.shape[1] > embedding_dim:
             embedding = embedding[:, :embedding_dim]
+        np.save(filename, embedding)  # Save the embedding
         return embedding.squeeze()
 
     elif model_type == 'sentence-transformer':
         vectors = sentence_transformer_ef.encode_documents([text])
         vectors = pad_or_truncate_vector(vectors, embedding_dim)
+        np.save(filename, vectors)  # Save the embedding
         return vectors
 
     else:
